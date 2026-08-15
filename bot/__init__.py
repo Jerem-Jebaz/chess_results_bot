@@ -1,0 +1,1 @@
+"""Chess results bot package."""
