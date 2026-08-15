@@ -1,0 +1,35 @@
+name: Chess Results Bot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *' # every 5 minutes
+  workflow_dispatch: {}
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install chromium
+
+      - name: Run one-shot checker
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TOURNAMENT_ID: ${{ secrets.TOURNAMENT_ID }}
+          PLAYER_NAME: ${{ secrets.PLAYER_NAME }}
+          POLL_INTERVAL_SECONDS: '90'
+          STATE_PATH: 'state/state.json'
+          BROWSER_HEADLESS: 'true'
+        run: |
+          python -m bot.one_shot
