@@ -89,9 +89,17 @@ async def run_once() -> int:
     if send_message and cfg.telegram_token and cfg.telegram_chat_id:
         try:
             bot = Bot(token=cfg.telegram_token)
-            bot.send_message(chat_id=cfg.telegram_chat_id, text=message_body)
-            logger.info("Alert sent to chat %s", cfg.telegram_chat_id)
-            state.last_alert_hash = new_hash
+            # python-telegram-bot v22 provides both sync and async helpers; ensure awaiting if async
+            send = getattr(bot, "send_message", None)
+            if send is None:
+                logger.error("Telegram Bot has no send_message method")
+            else:
+                if asyncio.iscoroutinefunction(send):
+                    await send(chat_id=cfg.telegram_chat_id, text=message_body)
+                else:
+                    send(chat_id=cfg.telegram_chat_id, text=message_body)
+                logger.info("Alert sent to chat %s", cfg.telegram_chat_id)
+                state.last_alert_hash = new_hash
         except Exception:
             logger.exception("Failed to send telegram message")
     elif send_message:
