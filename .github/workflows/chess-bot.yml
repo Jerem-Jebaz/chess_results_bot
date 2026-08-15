@@ -32,4 +32,7 @@ jobs:
           STATE_PATH: 'state/state.json'
           BROWSER_HEADLESS: 'true'
         run: |
+          # provide sane defaults if secrets aren't set
+          export TOURNAMENT_ID="${TOURNAMENT_ID:-1413687}"
+          export PLAYER_NAME="${PLAYER_NAME:-Joel Chelsan Jebaz}"
           python -m bot.one_shot
