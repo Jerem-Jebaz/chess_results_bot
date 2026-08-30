@@ -86,22 +86,89 @@ async def run_once() -> int:
             header = "Round finished"
         message_body = header + ":\n\n" + "\n".join(changes) + "\n\n" + text
 
-    if send_message and cfg.telegram_token and cfg.telegram_chat_id:
-        try:
-            bot = Bot(token=cfg.telegram_token)
-            # python-telegram-bot v22 provides both sync and async helpers; ensure awaiting if async
-            send = getattr(bot, "send_message", None)
-            if send is None:
-                logger.error("Telegram Bot has no send_message method")
+    # Telegram has a max message size (4096). Chunk or truncate to avoid BadRequest: Message is too long
+    def _chunk_text(text: str, max_len: int = 4000):
+        # naive chunker that prefers splitting on blank lines or newlines
+        if len(text) <= max_len:
+            yield text
+            return
+        parts = text.split("\n\n")
+        cur = ""
+        for p in parts:
+            candidate = (cur + "\n\n" + p) if cur else p
+            if len(candidate) <= max_len:
+                cur = candidate
             else:
-                if asyncio.iscoroutinefunction(send):
-                    await send(chat_id=cfg.telegram_chat_id, text=message_body)
+                if cur:
+                    yield cur
+                # if single part too large, further split by lines
+                if len(p) > max_len:
+                    lines = p.split("\n")
+                    cur2 = ""
+                    for l in lines:
+                        cand2 = (cur2 + "\n" + l) if cur2 else l
+                        if len(cand2) <= max_len:
+                            cur2 = cand2
+                        else:
+                            if cur2:
+                                yield cur2
+                            # last resort: hard split
+                            for i in range(0, len(l), max_len):
+                                yield l[i : i + max_len]
+                            cur2 = ""
+                    if cur2:
+                        yield cur2
+                    cur = ""
                 else:
-                    send(chat_id=cfg.telegram_chat_id, text=message_body)
-                logger.info("Alert sent to chat %s", cfg.telegram_chat_id)
-                state.last_alert_hash = new_hash
+                    cur = p
+        if cur:
+            yield cur
+
+    async def _safe_send(bot: Bot, chat_id: str, text: str) -> bool:
+        from telegram.error import BadRequest
+
+        send = getattr(bot, "send_message", None)
+        if send is None:
+            logger.error("Telegram Bot has no send_message method")
+            return False
+
+        # attempt to send in chunks
+        try:
+            for chunk in _chunk_text(text, max_len=4000):
+                if asyncio.iscoroutinefunction(send):
+                    await send(chat_id=chat_id, text=chunk)
+                else:
+                    send(chat_id=chat_id, text=chunk)
+            return True
+        except BadRequest as bre:
+            msg = str(bre)
+            if "Message is too long" in msg or len(text) > 4096:
+                # try truncating and sending a short summary instead
+                truncated = text[:3900] + "\n\n...(truncated)"
+                try:
+                    if asyncio.iscoroutinefunction(send):
+                        await send(chat_id=chat_id, text=truncated)
+                    else:
+                        send(chat_id=chat_id, text=truncated)
+                    return True
+                except Exception:
+                    logger.exception("Failed to send truncated telegram message")
+                    return False
+            else:
+                logger.exception("Telegram BadRequest while sending message: %s", bre)
+                return False
         except Exception:
-            logger.exception("Failed to send telegram message")
+            logger.exception("Unexpected error sending telegram message")
+            return False
+
+    if send_message and cfg.telegram_token and cfg.telegram_chat_id:
+        bot = Bot(token=cfg.telegram_token)
+        ok = await _safe_send(bot, cfg.telegram_chat_id, message_body or "")
+        if ok:
+            logger.info("Alert sent to chat %s", cfg.telegram_chat_id)
+            state.last_alert_hash = new_hash
+        else:
+            logger.error("Failed to deliver alert to chat %s", cfg.telegram_chat_id)
     elif send_message:
         logger.info("Changes detected but Telegram not configured.\n%s", message_body)
 
